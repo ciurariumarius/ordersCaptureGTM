@@ -1,0 +1,122 @@
+<script>
+(function () {
+  // GTM SETUP
+  // 1. Run gtm-capture-click-ids.html on Initialization - All Pages first.
+  // 2. Paste this entire file into a purchase Custom HTML tag.
+  // 3. Replace the endpoint below with your deployed Apps Script /exec URL.
+  // 4. Add a Custom Event trigger named "purchase" (exact case).
+  // 5. In Preview, check that purchase contains ecommerce.transaction_id,
+  //    ecommerce.value, ecommerce.currency, ecommerce.items, plus
+  //    user_data.email and user_data.phone. Confirm the sheet row;
+  //    a tag firing alone does not prove delivery.
+  // Apply your site's advertising consent settings before sending click IDs.
+  // This tag uses the existing GA4 purchase event. Do not push a second one.
+  var endpoint = 'PASTE_APPS_SCRIPT_WEB_APP_EXEC_URL_HERE';
+  if (endpoint.indexOf('https://script.google.com/macros/s/') !== 0) return;
+
+  // Find the latest purchase event. Stop at that event even if it has no order
+  // data, so an earlier purchase cannot be sent by mistake.
+  var dataLayer = window.dataLayer || [];
+  var order;
+  var purchaseEvent;
+  for (var i = dataLayer.length - 1; i >= 0; i--) {
+    var entry = dataLayer[i];
+    if (entry && entry.event === 'purchase') {
+      purchaseEvent = entry;
+      order = entry.ecommerce;
+      break;
+    }
+    // Also accept gtag('event', 'purchase', {...}) dataLayer entries.
+    if (entry && entry[0] === 'event' && entry[1] === 'purchase') {
+      purchaseEvent = entry[2];
+      order = purchaseEvent && (purchaseEvent.ecommerce || purchaseEvent);
+      break;
+    }
+  }
+  var transactionId = order && order.transaction_id != null
+    ? String(order.transaction_id).trim()
+    : '';
+  if (!transactionId) return;
+
+  var fields = new URLSearchParams();
+  fields.set('transaction_id', transactionId);
+  fields.set('value', order.value == null ? '' : String(order.value));
+  fields.set('currency', order.currency || '');
+  fields.set('tax', order.tax == null ? '' : String(order.tax));
+  fields.set('shipping', order.shipping == null ? '' : String(order.shipping));
+  fields.set('coupon', order.coupon || '');
+  fields.set('items', JSON.stringify(order.items || []));
+
+  // Read customer details only from this confirmed purchase event. These
+  // values are not kept in localStorage and are not added to the page URL.
+  var userData = (purchaseEvent && purchaseEvent.user_data) || order.user_data || {};
+  var email = typeof userData.email === 'string' ? userData.email.trim() : '';
+  function contactText(value) {
+    return typeof value === 'string' || typeof value === 'number'
+      ? String(value).trim()
+      : '';
+  }
+  // Your purchase event uses user_data.phone. Keep phone_number as a fallback.
+  var phone = contactText(userData.phone) || contactText(userData.phone_number);
+  if (email) fields.set('email', email);
+  if (phone) fields.set('phone_number', phone);
+
+  // The landing-page tag kept these values through checkout. The query-string
+  // fallback also covers a purchase on the landing page itself.
+  var ids = window.__orderCaptureClickIdsV1 || {};
+  if (!ids.gclid && !ids.fbc) {
+    try { ids = JSON.parse(localStorage.getItem('__orderCaptureClickIdsV1') || '{}') || {}; }
+    catch (error) { ids = {}; }
+  }
+  var now = Date.now();
+  var maxAgeMs = 90 * 24 * 60 * 60 * 1000;
+  function storedValue(entry) {
+    return entry && typeof entry.value === 'string' &&
+      entry.value.length <= 4096 &&
+      typeof entry.at === 'number' && entry.at <= now &&
+      now - entry.at <= maxAgeMs ? entry.value : '';
+  }
+  var query = new URLSearchParams(window.location.search);
+  function clickParam(name) {
+    var value = (query.get(name) || '').trim();
+    return value.length <= 2048 ? value : '';
+  }
+  var gclid = clickParam('gclid') || storedValue(ids.gclid);
+  var fbclid = clickParam('fbclid');
+  var fbc = storedValue(ids.fbc);
+  // Keep the original landing timestamp when the stored fbc has this fbclid.
+  if (fbclid && (!fbc || fbc.slice(-fbclid.length - 1) !== '.' + fbclid)) {
+    fbc = 'fb.1.' + now + '.' + fbclid;
+  }
+  // Prefer Meta's own _fbc cookie when it represents this same click and is
+  // at least as recent as our fallback value.
+  var cookieMatch = document.cookie.match(/(?:^|;\s*)_fbc=([^;]*)/);
+  if (cookieMatch) {
+    var cookieFbc = cookieMatch[1];
+    try { cookieFbc = decodeURIComponent(cookieFbc); } catch (error) {}
+    var format = /^fb\.\d+\.(\d{13})\..+$/.exec(cookieFbc);
+    var cookieTime = format ? Number(format[1]) : 0;
+    var sameClick = !fbclid || cookieFbc.slice(-fbclid.length - 1) === '.' + fbclid;
+    if (sameClick && cookieFbc.length <= 4096 && cookieTime <= now &&
+        now - cookieTime <= maxAgeMs &&
+        (!fbc || !ids.fbc || cookieTime >= ids.fbc.at)) {
+      fbc = cookieFbc;
+    }
+  }
+  if (gclid) fields.set('gclid', gclid);
+  if (fbc) fields.set('fbc', fbc);
+
+  // URLSearchParams becomes form fields in Apps Script e.parameter. A queued
+  // beacon is not a delivery receipt; verify the sheet row during testing.
+  if (navigator.sendBeacon && navigator.sendBeacon(endpoint, fields)) return;
+  if (window.fetch) {
+    fetch(endpoint, {
+      method: 'POST',
+      mode: 'no-cors',
+      credentials: 'omit',
+      keepalive: true,
+      body: fields
+    }).catch(function () {});
+  }
+})();
+</script>

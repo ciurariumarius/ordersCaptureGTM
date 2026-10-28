@@ -1,0 +1,87 @@
+// GOOGLE SHEETS / APPS SCRIPT SETUP
+// 1. In the REVERSEECZ sheet, add these exact row-1 headers:
+//    Timestamp | transaction_id | value | currency | tax | shipping | coupon
+//    items | gclid | fbc | email | phone_number
+//    Any column order works. Format transaction_id, gclid, fbc, email, and
+//    phone_number as plain text. Existing extra columns may remain.
+//    "items" stores JSON text. Restrict sheet sharing: email/phone are personal data.
+// 2. Paste this file into Apps Script. Check SHEET_NAME and SHEET_KEY below.
+// 3. Deploy a NEW Web app version: Execute as "Me", access "Anyone".
+// 4. Copy its /exec URL into the endpoint in gtm-purchase-to-sheet.html.
+// 5. Test one purchase, then repeat its transaction_id: only one row should exist.
+//
+// Field names must exactly match sheet headers. Timestamp is generated here.
+// The public Web app URL is not authentication; use backend order data if the
+// sheet must be an authoritative order record.
+var SHEET_NAME = 'REVERSEECZ';
+var SHEET_KEY = '1MhHJXldk-Xv64rTegHRMYcJ_jRDYJRWnOjVXOrhzY6M';
+
+function doPost(e) {
+  return handleResponse(e);
+}
+
+function doGet(e) {
+  // Preserve the original script's GET behavior for any existing integrations.
+  return handleResponse(e);
+}
+
+function handleResponse(e) {
+  var lock = LockService.getScriptLock();
+
+  try {
+    lock.waitLock(30000);
+    var sheet = SpreadsheetApp.openById(SHEET_KEY).getSheetByName(SHEET_NAME);
+    if (!sheet) throw new Error('Sheet not found: ' + SHEET_NAME);
+
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var parameters = (e && e.parameter) || {};
+    var transactionId = String(parameters.transaction_id || '').trim();
+    var transactionColumn = headers.indexOf('transaction_id') + 1;
+    if (transactionId && !transactionColumn) {
+      throw new Error('Missing transaction_id sheet header');
+    }
+
+    var lastRow = sheet.getLastRow();
+    // The lock makes the duplicate check and append one atomic operation.
+    if (transactionId && lastRow > 1) {
+      var existing = sheet.getRange(2, transactionColumn, lastRow - 1, 1)
+        .createTextFinder(transactionId)
+        .matchEntireCell(true)
+        .matchCase(true)
+        .findNext();
+      if (existing) {
+        return jsonResponse_({ result: 'duplicate', row: existing.getRow() });
+      }
+    }
+
+    var row = headers.map(function (header) {
+      if (header === 'Timestamp') return new Date();
+      // Store the normalized ID so a later repeat matches the duplicate check.
+      var value = header === 'transaction_id'
+        ? transactionId
+        : (parameters[header] || '');
+      return safeSheetValue_(value);
+    });
+    var nextRow = lastRow + 1;
+    sheet.getRange(nextRow, 1, 1, row.length).setValues([row]);
+    SpreadsheetApp.flush();
+    return jsonResponse_({ result: 'success', row: nextRow });
+  } catch (error) {
+    return jsonResponse_({ result: 'error', error: String(error) });
+  } finally {
+    if (lock.hasLock()) lock.releaseLock();
+  }
+}
+
+function safeSheetValue_(value) {
+  // A public request can supply strings that Sheets would interpret as formulas.
+  // Preserve negative numbers as numbers/text; prefix other formula-like text.
+  return typeof value === 'string' && /^(?:[=+@\t\r]|-(?!\d+(?:\.\d+)?$))/.test(value)
+    ? "'" + value
+    : value;
+}
+
+function jsonResponse_(data) {
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}

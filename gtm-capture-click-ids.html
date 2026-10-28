@@ -1,0 +1,63 @@
+<script>
+(function () {
+  // GTM SETUP
+  // 1. Paste this into a NEW Custom HTML tag.
+  // 2. Fire on Initialization - All Pages, including ad landing pages.
+  // 3. Keep the tag on the same site/origin as the purchase page. If checkout
+  //    changes domain, pass these IDs across domains separately.
+  // 4. Apply your site's advertising consent settings to this tag.
+  // This stores click IDs only when a real gclid/fbclid URL parameter or an
+  // existing Meta _fbc cookie is present. No fbc is invented for other visits.
+
+  var storageKey = '__orderCaptureClickIdsV1';
+  var maxAgeMs = 90 * 24 * 60 * 60 * 1000; // Local retention; adjust to policy.
+  var now = Date.now();
+  var ids = {};
+
+  try { ids = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; }
+  catch (error) { ids = {}; }
+
+  function valid(entry) {
+    return entry && typeof entry.value === 'string' && entry.value &&
+      typeof entry.at === 'number' && entry.at <= now &&
+      now - entry.at <= maxAgeMs;
+  }
+  if (!valid(ids.gclid)) delete ids.gclid;
+  if (!valid(ids.fbc)) delete ids.fbc;
+
+  function clickParam(name) {
+    var value = new URLSearchParams(window.location.search).get(name);
+    value = value && value.trim();
+    return value && value.length <= 2048 ? value : '';
+  }
+
+  function metaCookie() {
+    var match = document.cookie.match(/(?:^|;\s*)_fbc=([^;]*)/);
+    if (!match) return '';
+    try { return decodeURIComponent(match[1]); }
+    catch (error) { return match[1]; }
+  }
+
+  var gclid = clickParam('gclid');
+  if (gclid) ids.gclid = { value: gclid, at: now };
+
+  var fbclid = clickParam('fbclid');
+  if (fbclid) {
+    // Meta's fbc value wraps the actual fbclid with a millisecond timestamp.
+    ids.fbc = { value: 'fb.1.' + now + '.' + fbclid, at: now };
+  } else {
+    var fbc = metaCookie();
+    var match = /^fb\.\d+\.(\d{13})\..+$/.exec(fbc);
+    var cookieTime = match ? Number(match[1]) : 0;
+    if (cookieTime && cookieTime <= now && now - cookieTime <= maxAgeMs &&
+        (!ids.fbc || cookieTime > ids.fbc.at)) {
+      ids.fbc = { value: fbc, at: cookieTime };
+    }
+  }
+
+  // The in-memory copy also works if localStorage is unavailable on this page.
+  window.__orderCaptureClickIdsV1 = ids;
+  try { localStorage.setItem(storageKey, JSON.stringify(ids)); }
+  catch (error) {}
+})();
+</script>
